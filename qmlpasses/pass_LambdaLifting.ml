@@ -364,7 +364,7 @@ let get_arity_of_lambda e =
 let is_lambda e = get_arity_of_lambda e <> None
 
 type env = {
-  funcs: (Ident.t list * int) IdentMap.t; (* maps lifted ident to their environment * original arity *)
+  funcs: (Ident.t list * int * QmlTypes.Scheme.renaming) IdentMap.t; (* maps lifted ident to their environment * original arity *)
   (* maps from identifiers that will be lifted to their free variables *)
   gamma: QmlTypes.gamma (* the gamma this is given back by the pass
                          * starts empty and grows with each definition toplevel def
@@ -404,7 +404,7 @@ let get_vars env (funcs : binding list) =
          IdentSet.fold
            (fun n (ff_x,fv_x) ->
               try
-                let (env,_) = IdentMap.find n env.funcs in
+                let (env,_,_) = IdentMap.find n env.funcs in
                 (ff_x,(* when you call a local function, then you need its environment
                        * because you will replace 'f' in your body by f(env1,...,envn) *)
                  List.fold_left
@@ -603,6 +603,15 @@ let mk_let_rec_tree ~options (gamma,annotmap,env) e funcs vals body =
          | `typed ->
              let annot = Q.QAnnot.expr body in
              let tsc = QmlTypes.Env.Ident.find f env.gamma in
+             let (_,_,renaming) = IdentMap.find f env.funcs in
+             let annotmap =
+               QmlAstWalk.Expr.fold
+                 (fun annotmap e ->
+                    let annot = Q.QAnnot.expr e in
+                    let ty = QmlAnnotMap.find_ty annot annotmap in
+                    let ty = QmlTypes.Scheme.apply_renaming renaming ty in
+                    QmlAnnotMap.add_ty annot ty annotmap
+                 ) annotmap body in
              let annotmap =
                if QmlGenericScheme.is_empty tsc then
                  annotmap
@@ -704,7 +713,7 @@ let rec parameterLiftExp ~options ?outer_apply ((gamma,annotmap,env) as full_env
           (* if ident is a function symbol *)
           (* the args have not yet been refreshed
              (need to be substituted afterwards) *)
-          let (args,original_arity) = IdentMap.find x env.funcs in
+          let (args,original_arity,_) = IdentMap.find x env.funcs in
           match args, options.mode with
           | [], `typed ->
               let tsc = QmlTypes.Env.Ident.find x env.gamma in
@@ -884,7 +893,7 @@ and parameterLiftBnds ~options ~toplevel (gamma,annotmap,env) bnds =
                   | None ->
                       assert (match options.mode with `fun_action _ -> true | _ -> false);
                       -1 in
-                IdentMap.safe_add f_ident (env,original_arity) solution)
+                IdentMap.safe_add f_ident (env,original_arity,Obj.magic (-123)) solution)
              solution
              f_idents)
         env.funcs
@@ -895,20 +904,28 @@ and parameterLiftBnds ~options ~toplevel (gamma,annotmap,env) bnds =
   let env =
     match options.mode with
     | `typed ->
-        let env_gamma =
+        let env_gamma, funcs' =
           List.fold_left
-            (fun env_gamma (f_idents,extra) ->
+            (fun (env_gamma,funcs') (f_idents,extra) ->
                let tys = List.map (get_explicit_tsc gamma) extra in
                List.fold_left
-                 (fun env_gamma f_ident ->
+                 (fun (env_gamma,funcs') f_ident ->
                     let body = IdentAssoc.find f_ident funcs in
                     let ty_params,ty_ret = get_arrow_ty annotmap body in
                     let ty = Q.TypeArrow (tys @ ty_params,ty_ret) in
                     let tsc = QmlTypes.Scheme.quantify ty in
-                    QmlTypes.Env.Ident.add f_ident tsc env_gamma
-                 ) env_gamma f_idents
-            ) env.gamma funcs_sols in
-        {env with gamma = env_gamma}
+                    let tsc, renaming =
+                      if toplevel then
+                        tsc, QmlTypes.Scheme.empty_renaming
+                      else
+                        QmlTypes.Scheme.refresh_and_renaming tsc in
+                    let env_gamma = QmlTypes.Env.Ident.add f_ident tsc env_gamma in
+                    let (a,b,_) = IdentMap.find f_ident funcs' in
+                    let funcs' = IdentMap.add f_ident (a,b,renaming) funcs' in
+                    env_gamma, funcs'
+                 ) (env_gamma,funcs') f_idents
+            ) (env.gamma,env.funcs) funcs_sols in
+        {env with gamma = env_gamma; funcs = funcs'}
     | `fun_action _ | `untyped -> env in
 
   let hierarchy = env.hierarchy in
@@ -1130,7 +1147,7 @@ let check_lambda_lifting _original_gamma env code =
              (fun map (i,e) ->
                 let v =
                   try
-                    let (idents,_) = IdentMap.find i funcs in
+                    let (idents,_,_) = IdentMap.find i funcs in
                     let n = List.length idents in
                     (* checking that parameters introduced by the lambda lifting
                      * are used at least once *)
