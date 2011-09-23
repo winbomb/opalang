@@ -630,6 +630,7 @@ directive1 <-
   / "nonexpansive" {{ `nonexpansive }}
   / "openrecord" {{ `openrecord }}
   / "opensums" {{ `opensums }}
+  / "public_env" {{ `public_env }}
   / "throw"  {{ `throw }}
   / "typeof" {{ `typeof }}
   / "unsafe_cast" {{ `unsafe_cast }}
