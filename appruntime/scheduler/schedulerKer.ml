@@ -38,7 +38,8 @@ struct
   let tout_cb_size = 1000
   let client_hash_size = 1024
   let init_keys_size = 1024
-  let priority_max_successive = 1
+  let priority_max_successive = 5
+  let priority_maximal_time = 5
   let compute_max_successive = 10000
   let counter_max_reentrant_level = 0
   let counter_max_sync = 0
@@ -451,33 +452,41 @@ struct
       let _ = BHeap.insert priority.heap (tout_date, ref_cb) in
       ()
 
-  (* TODO, nb_successive should be use in conjunction with a maximum time for
-     successive jobs set *)
+  let _2ms = Time.milliseconds 2
+  let _10ms = Time.milliseconds 10
+  let add_2ms t = Time.add t _2ms
+  let positive_or_null t = Time.max Time.zero t
+  let (<.) t0 t1 = Time.is_before t0 t1
+  let (-.) t0 t1 = Time.difference t1 t0
+  let (+.) t0 t1 = Time.add t1 t0
+  let max_time = Time.milliseconds Const.priority_maximal_time
+
   let process priority =
-    let rec aux nb_successive =
+    let t0 = Time.now () in
+    let delay_ok t0 = (Time.now ()) <. (t0 +. max_time) in
+    let rec aux t0 nb_successive =
       match BHeap.minimum priority.heap with
       | Some (tout_date, ref_cb) ->
-          let t = Time.difference (Time.now ()) tout_date in
-          if (nb_successive > 0 ) && not (Time.is_positive t) then begin
-            let _ = BHeap.remove priority.heap in
-            let todo = !ref_cb in
-            if todo==nothing_todo then aux nb_successive
-            (* everything above is considered as no op *)
-            else (
-              begin
-                E.execute
-                  todo
-                  (L.error "priority process");
-              end;
-              aux (nb_successive - 1)
-            )
-            (* +2 ms  to have a small upper value *)
-            (* otherwise we could be called just to soon *)
-          end else
-            let t = Time.max Time.zero (Time.add t (Time.milliseconds 2)) in
-            Time.in_milliseconds t
-        | None -> -1 (* special epoll parameter: infinite wait *)
-    in aux Const.priority_max_successive
+        let todo = !ref_cb in
+        let nothing_todo = todo==nothing_todo in
+        let can_proceed =  (nb_successive > 0 || delay_ok t0) && (nothing_todo || tout_date <. t0) in
+        if can_proceed then (
+          ignore(BHeap.remove priority.heap);
+          if not(nothing_todo) then E.execute todo (L.error "priority process");
+          aux t0 (nb_successive - 1)
+        ) else (
+          (* should not happen frequently for usual delay *)
+          let dt = tout_date -. t0 in
+          (* to be sure to have something to do when we came back
+             we add some extra time to dt but only when it doesn't change dt too much *)
+          let dt = if _10ms <. dt
+            then add_2ms dt (* not need for positive_or_null *)
+            else positive_or_null dt
+          in
+          Time.in_milliseconds dt
+        )
+      | None -> -1 (* special epoll parameter: infinite wait *)
+    in aux t0 Const.priority_max_successive
 end
 
 
