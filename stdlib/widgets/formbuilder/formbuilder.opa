@@ -1,5 +1,5 @@
 /*
-    Copyright © 2011 MLstate
+    Copyright © 2011, 2012 MLstate
 
     This file is part of OPA.
 
@@ -106,7 +106,8 @@ type WFormBuilder.form =
   }
 
 type WFormBuilder.style =
-  { field_complete_style : bool -> WStyler.styler
+  { form_style : WStyler.styler
+  ; field_complete_style : bool -> WStyler.styler
   ; field_right_col_style : WStyler.styler
   ; label_style : bool -> WStyler.styler
   ; input_style : bool -> WStyler.styler
@@ -158,7 +159,8 @@ WFormBuilder =
   /** {1 Styling} */
 
   empty_style : WFormBuilder.style =
-    { field_complete_style(_) = WStyler.empty
+    { form_style = WStyler.empty
+    ; field_complete_style(_) = WStyler.empty
     ; field_right_col_style = WStyler.empty
     ; label_style(_) = WStyler.empty
     ; input_style(ok) = if ok then WStyler.empty else {class=["error"]}
@@ -172,11 +174,12 @@ WFormBuilder =
     }
 
   bootstrap_style : WFormBuilder.style =
-    { field_complete_style(ok) = {class=["clearfix"] ++ if ok then [] else ["error"]}
-    ; field_right_col_style = {class=["input"]}
-    ; label_style(_) = WStyler.empty
+    { form_style = {class=["form-horizontal"]}
+    ; field_complete_style(ok) = {class=["control-group"] ++ if ok then [] else ["error"]}
+    ; field_right_col_style = {class=["controls"]}
+    ; label_style(_) = {class=["control-label"]}
     ; input_style(ok) = if ok then WStyler.empty else {class=["error"]}
-    ; hint_style = {class=["help-block"]}
+    ; hint_style = {class=["help-inline"]}
     ; error_style = WStyler.empty
     ; non_required_style = WStyler.empty
     ; required_style = WStyler.empty
@@ -298,6 +301,8 @@ WFormBuilder =
 
   uri_accessor = string_converter(_, _, Uri.of_string)
 
+  /** {1 Field renderers} */
+
   render_text_input(~{data initial_value}, f) =
     add_initial_value(
       <input type="text" id={data.ids.input_id} />,
@@ -306,7 +311,7 @@ WFormBuilder =
 
   render_text_area(~{data initial_value}, size) =
     // FIXME, resize:none should be in css{...}
-    <textarea onclick={_ -> void} style="resize: none;" type="text" id={data.ids.input_id}
+    <textarea style="resize: none;" type="text" id={data.ids.input_id}
       rows={size.rows} cols={size.cols}>
       {initial_value}
     </>
@@ -391,7 +396,7 @@ WFormBuilder =
           }
       | {renderForm ~body ~on_submit} ->
            // FIXME, {Basic}/{Normal}
-          xhtml = form_html(params.id, state, {Basic}, body, on_submit)
+          xhtml = form_html(params, state, {Basic}, body, on_submit)
           { return = xhtml
           ; instruction = {unchanged}
           }
@@ -525,9 +530,10 @@ WFormBuilder =
   @private mk_field_checker(field, style) : WFormBuilder.field_checker =
     -> validate_field(field, style)
 
-  @private validate_field( field : WFormBuilder.field('ty)
-                         , style : WFormBuilder.style)
-                         : bool =
+  @private
+  validate_field( field : WFormBuilder.field('ty)
+                , style : WFormBuilder.style
+                ) : bool =
     ids = build_ids(field.data.id)
     input = access_field(field)
     err_fld = #{ids.error_id}
@@ -631,41 +637,43 @@ WFormBuilder =
     err_xhtml = builder.mk_err(rdata) |> hide
     builder.mk_field({label=label_xhtml input=input_xhtml hint=hint_xhtml err=err_xhtml data=rdata})
 
+  @private submit_form(form_type, fld_checkers, process_form) =
+    rec for_all_eager(f, l) =
+      match l with
+      | [] -> true
+      | [hd | tl] ->
+          match (f(hd), for_all_eager(f, tl)) with
+          | ({true}, {true}) -> true
+          | _ -> false
+    // we don't use List.for_all, as we want to enforce evaluation of all fields
+    // (and not stop when the first error is found)
+    all_ok = for_all_eager((v -> v()), fld_checkers)
+    if all_ok then
+      process_form(form_type)
+    else
+      void
+
   @private
-  form_html( form_id : string
+  form_html( config : WFormBuilder.form_config
            , fld_checkers : list(WFormBuilder.field_checker)
            , form_type : {Basic} / {Normal}
            , body : xhtml
            , process_form : WFormBuilder.form_data -> void
            ) : xhtml =
-    rec for_all_lazy(f, l) =
-      match l with
-      | [] -> true
-      | [hd | tl] ->
-          match (f(hd), for_all_lazy(f, tl)) with
-          | ({true}, {true}) -> true
-          | _ -> false
-    go(fd) =
-      // we don't use List.for_all, as we want to enforce evaluation of all fields
-      // (and not stop when the first error is found)
-      all_ok = for_all_lazy((v -> v()), fld_checkers)
-      if all_ok then
-        process_form(fd)
-      else
-        void
     form_body = <fieldset>{body}</>
     match form_type
     | {Basic} ->
-        <form id={form_id} action="#" onsubmit={_ -> go({SimpleForm})}
-          method="get" options:onsubmit="prevent_default">
+        <form id={config.id} action="#" method="get" options:onsubmit="prevent_default"
+          onsubmit={_ -> submit_form({SimpleForm}, fld_checkers, process_form)}>
           {form_body}
-        </form>
+        </>
+        |> add_style(config.style.form_style)
     | {Normal} ->
         process(data) =
-          do Scheduler.push( -> go({FileUploadForm=data}))
+          do Scheduler.push( -> submit_form({FileUploadForm=data}, fld_checkers, process_form))
           void
         config = {Upload.default_config() with
-                    ~form_body ~process form_id=form_id}
+                    ~form_body ~process form_id=config.id}
         Upload.html(config)
 
 }}

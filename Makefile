@@ -39,6 +39,7 @@ all: $(MYOCAMLBUILD)
 ifndef NO_MANPAGES
 	$(MAKE) manpages
 endif
+	$(MAKE) $(OPA_TOOLS)
 
 .PHONY: build
 build: all
@@ -65,14 +66,29 @@ stdlib: opa-packages
 
 DISTRIB_TOOLS = opa-bin opa-plugin-builder-bin opa-plugin-browser-bin bslServerLib.ml opa-db-server opa-db-tool opa-cloud opatop opa-translate
 
+OPA_TOOLS = opa-create
+
 .PHONY: distrib
 distrib: $(MYOCAMLBUILD)
 	$(OCAMLBUILD) $(call target-tools,$(DISTRIB_TOOLS)) opa-packages.stamp
 	@$(call copy-tools,$(DISTRIB_TOOLS))
+	$(MAKE) $(OPA_TOOLS)
 
 .PHONY: manpages
 manpages: $(MYOCAMLBUILD)
 	$(MAKE) -C manpages OCAMLBUILD="$(OCAMLBUILD)" BLDDIR=../$(BUILD_DIR)
+
+.PHONY: opa-create
+opa-create: $(MYOCAMLBUILD)
+	$(OCAMLBUILD) tools/opa-create/src/opa-create.exe
+	@$(copy-tool-opa-create)
+.PHONY: install-opa-create
+install-opa-create:
+	@$(install-opa-create)
+target-tool-opa-create = tools/opa-create/src/opa-create.exe
+copy-tool-opa-create = mkdir -p $(BUILD_DIR)/bin && $(INSTALL) $(BUILD_DIR)/tools/opa-create/src/opa-create.exe $(BUILD_DIR)/bin/opa-create
+install-opa-create = mkdir -p $(PREFIX)/bin && $(INSTALL) $(BUILD_DIR)/bin/opa-create $(INSTALL_DIR)/bin/opa-create
+
 
 ##
 ## INSTALLATION

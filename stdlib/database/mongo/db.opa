@@ -366,10 +366,7 @@ Then use option --db-remote instead of --db-local.
 
     jlog(msg) = Log.notice("DbGen/Mongo", msg)
 
-    default_archive =
-      arch = "x86_64" // TODO 32 BITS
-      ver  = "2.0.2"
-      os = (
+    os =
       #<Ifstatic:IS_LINUX 1>
         some("linux")
       #<Else>#<Ifstatic:IS_MAC 1>
@@ -377,12 +374,22 @@ Then use option --db-remote instead of --db-local.
       #<Else>
         none
       #<End>#<End>
-      )
+
+    wget(from, to) =      
+      #<Ifstatic:IS_MAC 1>
+        "curl {from} > {to}"
+      #<Else>
+        "wget {from} -O {to}"
+      #<End>
+      
+    default_archive =
+      arch = "x86_64" // TODO 32 BITS
+      ver  = "2.0.2"
       Option.map(os -> "mongodb-{os}-{arch}-{ver}", os)
 
     default_url =
       Option.map(default_archive ->
-        "http://fastdl.mongodb.org/linux/{default_archive}.tgz",
+        "http://fastdl.mongodb.org/{Option.get(os)}/{default_archive}.tgz",
         default_archive)
 
     default_remote = {
@@ -442,7 +449,7 @@ Then use option --db-remote instead of --db-local.
           ) else (
             do jlog("MongoDB does not seem to be installed in '{path}'")
             do jlog("Please wait while Opa downloading MongoDB from '{default_url}'...")
-            _ = System.exec("wget {default_url} -O {tgzpath}", "")
+            _ = System.exec(wget(default_url, tgzpath), "")
             do jlog("MongoDB was downloaded ({tgzpath})")
             tarcmd = "tar -xvzf {tgzpath} -C {path}"
             do jlog("Uncompressing of MongoDB archive... ({tarcmd})")
@@ -525,7 +532,7 @@ Then use option --db-remote instead of --db-local.
         | {some = ~{local}} -> open_local(name, local, seed)
         | {none} ->
           match Db.default_cmdline with
-          | {none} -> open_remote(name, default_remote, seed)
+          | {none} -> open_local(name, {path = default_local()}, seed)
           | {some = {local = {none}}} -> open_local(name, {path = default_local()}, seed)
           | {some = {local = {some = path}}} -> open_local(name, ~{path}, seed)
           | {some = {remote = {some = remote}}} ->
@@ -584,10 +591,10 @@ DbSet = {{
     opt = Bitwise.lor(opt, MongoCommon.UniqueBit)
     match MongoDriver.create_index(db.db, "{db.name}.{id}", key, opt) with
     | {true} ->
-      do Log.notice("DbGen/Mongo", "(success) Index {idx} at {path} as been created")
+      do Log.notice("DbGen/Mongo", "(success) Index {idx} at {path} has been created")
       void
     | {false} ->
-      do Log.error("DbGen/Mongo", "(failure) Error when creating index {idx} at {path}")
+      do Log.error("DbGen/Mongo", "(failure) Error while creating index {idx} at {path}")
       error("Error when creating index")
 
   @package indexes(db:DbMongo.t, path:list(string), idxs) =
